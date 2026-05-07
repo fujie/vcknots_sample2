@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+    "module": "NodeNext",
+    "esModuleInterop": true,
+    "moduleResolution": "nodenext",
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "sourceMap": true,
+    "strict": true,
+    "target": "ES2022",
+    "skipLibCheck": true,
+    "declaration": true,
+    "resolveJsonModule": true
+  },
+	"compileOnSave": true
+}

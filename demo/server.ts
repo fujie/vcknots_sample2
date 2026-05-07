@@ -6,19 +6,19 @@
  * - /callback の結果をトラッキングして Verifier ページにポーリング提供
  *
  * 起動方法:
- *   node demo/server.mjs
+ *   npx tsx demo/server.ts
  */
 
 import { createServer } from 'node:http'
 import { readFileSync, existsSync } from 'node:fs'
-import { dirname, join, extname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join, extname } from 'node:path'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
+// プロジェクトルートから npx tsx demo/server.ts で実行する想定
+const DEMO_DIR = join(process.cwd(), 'demo')
 const BACKEND = process.env.BACKEND_URL ?? 'http://localhost:8080'
 const PORT = Number(process.env.DEMO_PORT ?? 3000)
 
-const MIME = {
+const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript',
   '.css': 'text/css',
@@ -28,18 +28,21 @@ const MIME = {
 }
 
 // Verification result store (state → result)
-const verificationResults = new Map()
+const verificationResults = new Map<
+  string,
+  { verified: boolean; timestamp: number; payload?: unknown }
+>()
 
-function readBody(req) {
+function readBody(req: import('node:http').IncomingMessage): Promise<string> {
   return new Promise((resolve) => {
     let data = ''
-    req.on('data', (chunk) => (data += chunk.toString()))
+    req.on('data', (chunk: Buffer) => (data += chunk.toString()))
     req.on('end', () => resolve(data))
   })
 }
 
 // ── CORS helper ──────────────────────────────────────────
-function setCors(req, res) {
+function setCors(req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) {
   const origin = req.headers.origin ?? '*'
   res.setHeader('Access-Control-Allow-Origin', origin)
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
@@ -73,7 +76,7 @@ const server = createServer(async (req, res) => {
   // ── Static files ────────────────────────────────────────
   if (req.method === 'GET') {
     const filePath = url.pathname === '/' ? '/index.html' : url.pathname
-    const fullPath = join(__dirname, filePath)
+    const fullPath = join(DEMO_DIR, filePath)
     if (existsSync(fullPath) && !fullPath.includes('..')) {
       const ext = extname(fullPath)
       res.writeHead(200, { 'Content-Type': MIME[ext] ?? 'application/octet-stream' })
@@ -85,12 +88,12 @@ const server = createServer(async (req, res) => {
   // ── Proxy to backend ───────────────────────────────────
   try {
     const backendUrl = `${BACKEND}${url.pathname}${url.search}`
-    const headers = {}
+    const headers: Record<string, string> = {}
     for (const [k, v] of Object.entries(req.headers)) {
       if (typeof v === 'string' && k !== 'host') headers[k] = v
     }
 
-    let body
+    let body: string | undefined
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       body = await readBody(req)
     }
@@ -112,7 +115,7 @@ const server = createServer(async (req, res) => {
       const params = new URLSearchParams(body)
       const state = params.get('state')
       if (state) {
-        let payload
+        let payload: unknown
         try {
           payload = JSON.parse(responseBody)
         } catch {}
@@ -124,7 +127,7 @@ const server = createServer(async (req, res) => {
       }
     }
 
-    const outHeaders = {}
+    const outHeaders: Record<string, string> = {}
     upstream.headers.forEach((v, k) => {
       // transfer-encoding と CORS ヘッダーはスキップ（自前で付与する）
       if (k === 'transfer-encoding') return

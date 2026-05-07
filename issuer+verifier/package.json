@@ -1,0 +1,62 @@
+{
+	"name": "@trustknots/vcknots",
+	"version": "0.5.0",
+	"description": "A flexible and extensible library for implementing OpenID for Verifiable Credential Issuance (OID4VCI) and OpenID for Verifiable Presentations (OID4VP).",
+	"main": "lib/index.js",
+	"types": "lib/index.d.ts",
+	"files": [
+		"lib"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/trustknots/vcknots.git",
+		"directory": "issuer+verifier"
+	},
+	"exports": {
+		".": "./lib/index.js",
+		"./errors": "./lib/errors/index.js",
+		"./providers": "./lib/providers/index.js",
+		"./providers/in-memory": "./lib/providers/in-memory/index.js",
+		"./issuer": "./lib/issuer.flows.js",
+		"./verifier": "./lib/verifier.flows.js",
+		"./authz": "./lib/authz.flows.js"
+	},
+	"scripts": {
+		"build": "tsc",
+		"format": "biome format --write ./src/**/*.ts",
+		"lint": "biome lint ./src/**/*.ts",
+		"test": "node --import tsx --test \"test/**/*.spec.ts\"",
+		"test:ci": "node --import tsx --test --experimental-test-coverage \"test/**/*.spec.ts\"",
+		"test:all": "node --import tsx --test --experimental-test-coverage --test-coverage-lines=80 --test-coverage-functions=80 --test-coverage-branches=80 \"test/**/*.spec.ts\"",
+		"it": "node --import tsx --test 'test/**/*.integration.spec.ts'",
+		"build:tested": "pnpm run test:all && pnpm run build",
+		"typecheck": "tsc --noEmit"
+	},
+	"keywords": [
+		"oid4vci",
+		"oid4vp",
+		"verifiable-credentials",
+		"ssi",
+		"did",
+		"openid",
+		"presentation-exchange",
+		"digital-identity"
+	],
+	"author": "Trust Knots Project Team",
+	"license": "Apache-2.0",
+	"packageManager": "pnpm@10.33.0",
+	"dependencies": {
+		"@sd-jwt/core": "0.19.0",
+		"@sd-jwt/crypto-nodejs": "0.19.0",
+		"@sd-jwt/decode": "0.19.0",
+		"base64url": "3.0.1",
+		"did-resolver": "4.1.0",
+		"jose": "6.2.2",
+		"jsonwebtoken": "9.0.3",
+		"key-did-resolver": "4.0.0",
+		"zod": "4.3.6"
+	},
+	"devDependencies": {
+		"@types/jsonwebtoken": "9.0.10"
+	}
+}

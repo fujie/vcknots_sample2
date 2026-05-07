@@ -1,0 +1,6 @@
+output/
+deliwac_old/
+
+# coverage report
+cover.html
+cover.out

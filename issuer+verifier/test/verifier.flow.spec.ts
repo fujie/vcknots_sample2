@@ -1,0 +1,782 @@
+import assert from 'node:assert/strict'
+import { generateKeyPairSync } from 'node:crypto'
+import { before, beforeEach, describe, it, mock } from 'node:test'
+import { generateKeyPair } from 'jose'
+import { AuthorizationRequest } from '../src/authorization-request.types'
+import { AuthorizationResponse } from '../src/authorization-response.types'
+import { ClientId } from '../src/client-id.types'
+import { ClientIdentifier } from '../src/client-id-scheme.types'
+import { Dcql } from '../src/dcql.type'
+import { PresentationExchange } from '../src/presentation-exchange.types'
+import {
+  CnonceProvider,
+  CnonceStoreProvider,
+  CredentialQueryGenerationOptions,
+  CredentialQueryProvider,
+  RequestObjectIdProvider,
+  RequestObjectStoreProvider,
+  VerifierMetadataStoreProvider,
+  VerifierSignatureKeyProvider,
+  VerifierSignatureKeyStoreProvider,
+  VerifierCertificateStoreProvider,
+  CertificateProvider,
+  VerifyVerifiablePresentationProvider,
+} from '../src/providers'
+import { VcknotsContext, initializeContext } from '../src/vcknots.context'
+import { VerifierMetadata } from '../src/verifier-metadata.types'
+import { VerifierFlow, initializeVerifierFlow } from '../src/verifier.flows'
+import { TransactionDataProvider } from '../src/providers'
+import base64url from 'base64url'
+
+type JwtHeader = {
+  alg: string
+  typ?: string
+  kid?: string
+}
+
+type JwtPayload = {
+  [key: string]: unknown
+}
+
+const b64u = (obj: Record<string, unknown>) =>
+  Buffer.from(JSON.stringify(obj)).toString('base64url')
+
+const makeJwt = (header: JwtHeader, payload: JwtPayload) => `${b64u(header)}.${b64u(payload)}.sig`
+
+// a minimal VC payload that parseVerifiableCredentialBase() should accept
+const minimalVc = {
+  '@context': ['https://www.w3.org/2018/credentials/v1'],
+  type: ['VerifiableCredential'],
+  issuer: 'https://example.com',
+  issuanceDate: '2024-01-01T00:00:00Z',
+}
+
+describe('VerifierFlow', () => {
+  let context: VcknotsContext
+  let verifierFlow: VerifierFlow
+
+  const mockVerifierMetadataStore = {
+    kind: 'verifier-metadata-store-provider',
+    name: 'mock-verifier-metadata-store-provider',
+    single: true,
+    save: mock.fn(),
+    fetch: mock.fn(),
+  } satisfies VerifierMetadataStoreProvider
+
+  const mockCnonceProvider = {
+    kind: 'cnonce-provider',
+    name: 'mock-cnonce-provider',
+    single: true,
+    generate: mock.fn(),
+  } satisfies CnonceProvider
+
+  const mockCnonceStoreProvider = {
+    kind: 'cnonce-store-provider',
+    name: 'mock-cnonce-store-provider',
+    single: true,
+    save: mock.fn(),
+    validate: mock.fn(),
+    revoke: mock.fn(),
+  } satisfies CnonceStoreProvider
+
+  const mockCredentialQueryProvider = {
+    kind: 'credential-query-provider',
+    name: 'mock-credential-query-provider',
+    single: false,
+    generate: mock.fn(),
+    canHandle: mock.fn(),
+  } satisfies CredentialQueryProvider
+
+  const mockVerifyVerifiablePresentationProvider = {
+    kind: 'verify-verifiable-presentation-provider',
+    name: 'mock-verify-verifiable-presentation-provider',
+    single: false,
+    verify: mock.fn(),
+    canHandle: mock.fn(),
+  } satisfies VerifyVerifiablePresentationProvider
+
+  const mockRequestObjectStoreProvider = {
+    kind: 'request-object-store-provider',
+    name: 'mock-in-memory-request-object-store-provider',
+    single: true,
+    fetch: mock.fn(),
+    save: mock.fn(),
+    delete: mock.fn(),
+  } satisfies RequestObjectStoreProvider
+
+  const mockRequestObjectIdProvider = {
+    kind: 'request-object-id-provider',
+    name: 'default-request-object-id-provider',
+    single: true,
+    generate: mock.fn(),
+  } satisfies RequestObjectIdProvider
+
+  const mockTransactionDataProvider = {
+    kind: 'transaction-data-provider',
+    name: 'mock-transaction-data-provider',
+    single: true,
+    generate: mock.fn(),
+  } satisfies TransactionDataProvider
+
+  const mockKeyProvider = {
+    kind: 'verifier-signature-key-provider',
+    name: 'mock-verifier-signature-key-provider',
+    single: false,
+    generate: mock.fn(),
+    canHandle: mock.fn(),
+  } satisfies VerifierSignatureKeyProvider
+
+  const mockKeyStoreProvider = {
+    kind: 'verifier-signature-key-store-provider',
+    name: 'mock-verifier-signature-key-store-provider',
+    single: true,
+    save: mock.fn(),
+    fetch: mock.fn(),
+    sign: mock.fn(),
+  } satisfies VerifierSignatureKeyStoreProvider
+
+  const mockCertificateStoreProvider = {
+    kind: 'verifier-certificate-store-provider',
+    name: 'mock-verifier-certificate-store-provider',
+    single: true,
+    save: mock.fn(),
+    fetch: mock.fn(),
+  } satisfies VerifierCertificateStoreProvider
+
+  const mockCertificateProvider = {
+    kind: 'certificate-provider',
+    name: 'mock-certificate-provider',
+    single: true,
+    validate: mock.fn(),
+    getPublicKey: mock.fn(),
+  } satisfies CertificateProvider
+
+  beforeEach(() => {
+    mock.reset()
+  })
+
+  before(() => {
+    context = initializeContext({
+      providers: [
+        mockVerifierMetadataStore,
+        mockCnonceProvider,
+        mockCnonceStoreProvider,
+        mockCredentialQueryProvider,
+        mockRequestObjectStoreProvider,
+        mockRequestObjectIdProvider,
+        mockTransactionDataProvider,
+        mockKeyProvider,
+        mockKeyStoreProvider,
+        mockCertificateStoreProvider,
+        mockCertificateProvider,
+        mockVerifyVerifiablePresentationProvider,
+      ],
+    })
+    verifierFlow = initializeVerifierFlow(context)
+  })
+
+  describe('createVerifierMetadata', () => {
+    it('should generate and persist keys via key store when options are omitted', async () => {
+      const metadata = VerifierMetadata({
+        client_name: 'Test Verifier',
+        vp_formats: {
+          jwt_vc_json: { alg_values_supported: ['ES256'] },
+          jwt_vp_json: { alg_values_supported: ['ES256'] },
+        },
+      })
+      const { publicKey } = await generateKeyPair('ES256', { extractable: true })
+
+      mock.method(mockKeyStoreProvider, 'save', async () => {})
+      mock.method(mockKeyStoreProvider, 'fetch', async () => publicKey)
+      mock.method(mockVerifierMetadataStore, 'save', async () => {})
+
+      await verifierFlow.createVerifierMetadata(ClientId('https://example.com'), metadata)
+
+      assert.equal(mockKeyStoreProvider.save.mock.callCount(), 1)
+      assert.equal(mockKeyStoreProvider.fetch.mock.callCount(), 1)
+      assert.equal(mockVerifierMetadataStore.save.mock.callCount(), 1)
+      assert.equal(metadata.authorization_signed_response_alg, 'ES256')
+      assert.ok(metadata.jwks)
+      assert.equal(metadata.jwks.keys.length, 1)
+      assert.equal(metadata.jwks.keys[0].alg, 'ES256')
+    })
+
+    it('should persist provided verifier keys before saving metadata', async () => {
+      const events: string[] = []
+      const metadata = VerifierMetadata({
+        client_name: 'Test Verifier',
+        vp_formats: {
+          jwt_vc_json: { alg_values_supported: ['ES256'] },
+          jwt_vp_json: { alg_values_supported: ['ES256'] },
+        },
+      })
+      const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+      const publicKeyPem = publicKey.export({ format: 'pem', type: 'spki' }).toString()
+
+      mock.method(mockVerifierMetadataStore, 'save', async () => {
+        events.push('metadata')
+      })
+      mock.method(mockKeyStoreProvider, 'save', async () => {
+        events.push('key')
+      })
+
+      await verifierFlow.createVerifierMetadata(ClientId('https://example.com'), metadata, {
+        format: 'pem',
+        alg: 'ES256',
+        publicKey: publicKeyPem,
+        privateKey: 'private-key',
+      })
+
+      assert.deepEqual(events, ['key', 'metadata'])
+    })
+  })
+
+  describe('findVerifierMetadata', () => {
+    it('should find verifier metadata', async () => {
+      const verifierId = ClientId('https://example.com')
+      const metadata = VerifierMetadata({
+        client_name: 'Test Verifier',
+        vp_formats: {
+          jwt_vc_json: { alg_values_supported: ['ES256'] },
+          jwt_vp_json: { alg_values_supported: ['ES256'] },
+        },
+      })
+
+      mock.method(mockVerifierMetadataStore, 'fetch', async (id: ClientId) => {
+        assert.equal(id, verifierId)
+        return metadata
+      })
+
+      const found = await verifierFlow.findVerifierMetadata(verifierId)
+
+      assert.deepEqual(found, metadata)
+      assert.equal(mockVerifierMetadataStore.fetch.mock.callCount(), 1)
+    })
+
+    it('should return null if verifier metadata is not found', async () => {
+      const verifierId = ClientId('https://example.com/not-found')
+
+      mock.method(mockVerifierMetadataStore, 'fetch', async (id: ClientId) => {
+        assert.equal(id, verifierId)
+        return null
+      })
+
+      const found = await verifierFlow.findVerifierMetadata(verifierId)
+
+      assert.strictEqual(found, null)
+      assert.equal(mockVerifierMetadataStore.fetch.mock.callCount(), 1)
+    })
+  })
+
+  describe('createAuthzRequest', () => {
+    it('creates request for Presentation Exchange', async () => {
+      const metadata = VerifierMetadata({
+        client_name: 'Test Verifier',
+        vp_formats: {
+          jwt_vc_json: {
+            alg_values_supported: ['ES256'],
+          },
+          jwt_vp_json: {
+            alg_values_supported: ['ES256'],
+          },
+          ldp_vp: {
+            proof_type: ['JsonWebSignature2020'],
+          },
+        },
+      })
+      const presentationDefinition = {
+        id: 'test-pd-id',
+        input_descriptors: [
+          {
+            id: 'test_credential',
+            constraints: {
+              fields: [
+                {
+                  path: ['$.type[*]'],
+                  filter: {
+                    type: 'string',
+                    const: 'TestCredential',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+
+      mock.method(mockVerifierMetadataStore, 'fetch', async () => metadata)
+      mock.method(mockCnonceProvider, 'generate', async () => 'nonce-123')
+      mock.method(mockCnonceStoreProvider, 'save', async () => {})
+      mock.method(
+        mockCredentialQueryProvider,
+        'generate',
+        async (options: CredentialQueryGenerationOptions) => {
+          assert.equal(options.kind, 'presentation-exchange')
+          return PresentationExchange(options.query)
+        }
+      )
+
+      const req = await verifierFlow.createAuthzRequest(
+        ClientId('did:key:verifier'),
+        'vp_token',
+        'redirect_uri:did:key:verifier',
+        'direct_post',
+        { presentation_definition: presentationDefinition },
+        false,
+        {}
+      )
+
+      AuthorizationRequest(req)
+      assert.equal(req.response_type, 'vp_token')
+      assert.equal(req.response_mode, 'direct_post')
+      assert.equal(req.nonce, 'nonce-123')
+    })
+
+    it('creates request for Dcql', async () => {
+      const metadata = VerifierMetadata({
+        client_name: 'Test Verifier',
+        vp_formats: {
+          jwt_vc_json: {
+            alg_values_supported: ['ES256'],
+          },
+          jwt_vp_json: {
+            alg_values_supported: ['ES256'],
+          },
+          ldp_vp: {
+            proof_type: ['JsonWebSignature2020'],
+          },
+          'dc+sd-jwt': {
+            'sd-jwt_alg_values': ['ES256', 'ES384'],
+            'kb-jwt_alg_values': ['ES256', 'ES384'],
+          },
+        },
+      })
+      const query = {
+        credentials: [
+          {
+            id: 'my_credential',
+            format: 'dc+sd-jwt',
+            meta: {
+              vct_values: ['https://credentials.example.com/identity_credential'],
+            },
+            claims: [
+              { path: ['last_name'] },
+              { path: ['first_name'] },
+              { path: ['address', 'street_address'] },
+            ],
+          },
+        ],
+      }
+
+      mock.method(mockVerifierMetadataStore, 'fetch', async () => metadata)
+      mock.method(mockCnonceProvider, 'generate', async () => 'nonce-123')
+      mock.method(mockCnonceStoreProvider, 'save', async () => {})
+      mock.method(
+        mockCredentialQueryProvider,
+        'generate',
+        async (options: CredentialQueryGenerationOptions) => {
+          assert.equal(options.kind, 'dcql')
+          return Dcql(options.query)
+        }
+      )
+      mock.method(mockTransactionDataProvider, 'generate', (type: string, ids: string[]) => {
+        const data = {
+          type,
+          credential_ids: ids,
+        }
+        return base64url.encode(JSON.stringify(data))
+      })
+
+      const req = await verifierFlow.createAuthzRequest(
+        ClientId('did:key:verifier'),
+        'vp_token',
+        'redirect_uri:did:key:verifier',
+        'direct_post',
+        { dcql_query: query },
+        false,
+        {}
+      )
+
+      AuthorizationRequest(req)
+      assert.equal(req.response_type, 'vp_token')
+      assert.equal(req.response_mode, 'direct_post')
+      assert.equal(req.nonce, 'nonce-123')
+    })
+
+    it('should throw VERIFIER_NOT_FOUND if metadata missing', async () => {
+      const presentationDefinition = {
+        id: 'test-pd-id',
+        input_descriptors: [
+          {
+            id: 'test_credential',
+            constraints: {
+              fields: [
+                {
+                  path: ['$.type[*]'],
+                  filter: {
+                    type: 'string',
+                    const: 'TestCredential',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+      mock.method(mockVerifierMetadataStore, 'fetch', async () => null)
+      await assert.rejects(
+        verifierFlow.createAuthzRequest(
+          ClientId('https://example.com'),
+          'vp_token',
+          'redirect_uri:https://example.com',
+          'direct_post',
+          { presentation_definition: presentationDefinition },
+          false,
+          {}
+        ),
+        { name: 'VERIFIER_NOT_FOUND' }
+      )
+    })
+
+    it('should save RequestObject and returns request_uri when request_uri is used', async () => {
+      const metadata = VerifierMetadata({
+        client_name: 'Test Verifier',
+        vp_formats: {
+          jwt_vc_json: {
+            alg_values_supported: ['ES256'],
+          },
+          jwt_vp_json: {
+            alg_values_supported: ['ES256'],
+          },
+          ldp_vp: {
+            proof_type: ['JsonWebSignature2020'],
+          },
+        },
+      })
+      const presentationDefinition = {
+        id: 'test-pd-id',
+        input_descriptors: [
+          {
+            id: 'test_credential',
+            constraints: {
+              fields: [
+                {
+                  path: ['$.type[*]'],
+                  filter: {
+                    type: 'string',
+                    const: 'TestCredential',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+      mock.method(mockVerifierMetadataStore, 'fetch', async () => metadata)
+      mock.method(
+        mockCredentialQueryProvider,
+        'generate',
+        async (options: CredentialQueryGenerationOptions) => {
+          assert.equal(options.kind, 'presentation-exchange')
+          return PresentationExchange(options.query)
+        }
+      )
+      mock.method(mockRequestObjectIdProvider, 'generate', async () => '1234')
+      mock.method(mockRequestObjectStoreProvider, 'save', async () => {})
+
+      const req = await verifierFlow.createAuthzRequest(
+        ClientId('https://example.com'),
+        'vp_token',
+        'redirect_uri:https://example.com',
+        'direct_post',
+        { presentation_definition: presentationDefinition },
+        true,
+        { base_url: 'https://example.com' }
+      )
+
+      AuthorizationRequest(req)
+      assert.equal(typeof req.request_uri, 'string')
+      assert.equal(
+        req.request_uri,
+        'https://example.com/request.jwt/1234',
+        'request_uri should be composed with base_url, verifierId, and generated requestObjectId'
+      )
+      assert.equal(mockCnonceProvider.generate.mock.callCount(), 0)
+      assert.equal(mockCnonceStoreProvider.save.mock.callCount(), 0)
+      assert.equal(mockRequestObjectIdProvider.generate.mock.callCount(), 1)
+      assert.equal(mockRequestObjectStoreProvider.save.mock.callCount(), 1)
+    })
+
+    it('should throw INVALID_REQUEST when request_uri is true and base_url is not present', async () => {
+      const metadata = VerifierMetadata({
+        client_name: 'Test Verifier',
+        vp_formats: {
+          jwt_vc_json: {
+            alg_values_supported: ['ES256'],
+          },
+          jwt_vp_json: {
+            alg_values_supported: ['ES256'],
+          },
+          ldp_vp: {
+            proof_type: ['JsonWebSignature2020'],
+          },
+        },
+      })
+      const presentationDefinition = {
+        id: 'test-pd-id',
+        input_descriptors: [
+          {
+            id: 'test_credential',
+            constraints: {
+              fields: [
+                {
+                  path: ['$.type[*]'],
+                  filter: {
+                    type: 'string',
+                    const: 'TestCredential',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+      mock.method(mockVerifierMetadataStore, 'fetch', async () => metadata)
+      mock.method(
+        mockCredentialQueryProvider,
+        'generate',
+        async (options: CredentialQueryGenerationOptions) => {
+          assert.equal(options.kind, 'presentation-exchange')
+          return PresentationExchange(options.query)
+        }
+      )
+      mock.method(mockRequestObjectIdProvider, 'generate', async () => 'reqobj-123')
+      mock.method(mockRequestObjectStoreProvider, 'save', async () => {})
+
+      await assert.rejects(
+        verifierFlow.createAuthzRequest(
+          ClientId('https://example.com'),
+          'vp_token',
+          'redirect_uri:https://example.com',
+          'direct_post',
+          { presentation_definition: presentationDefinition },
+          true,
+          {}
+        ),
+        { name: 'INVALID_REQUEST' }
+      )
+    })
+
+    it('should throw INVALID_REQUEST when neither request_uri nor base_url is present', async () => {
+      const metadata = VerifierMetadata({
+        client_name: 'Test Verifier',
+        vp_formats: {
+          jwt_vc_json: {
+            alg_values_supported: ['ES256'],
+          },
+          jwt_vp_json: {
+            alg_values_supported: ['ES256'],
+          },
+          ldp_vp: {
+            proof_type: ['JsonWebSignature2020'],
+          },
+        },
+      })
+      const presentationDefinition = {
+        id: 'test-pd-id',
+        input_descriptors: [
+          {
+            id: 'test_credential',
+            constraints: {
+              fields: [
+                {
+                  path: ['$.type[*]'],
+                  filter: {
+                    type: 'string',
+                    const: 'TestCredential',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+      mock.method(mockVerifierMetadataStore, 'fetch', async () => metadata)
+      mock.method(
+        mockCredentialQueryProvider,
+        'generate',
+        async (options: CredentialQueryGenerationOptions) => {
+          assert.equal(options.kind, 'presentation-exchange')
+          return PresentationExchange(options.query)
+        }
+      )
+      mock.method(mockRequestObjectIdProvider, 'generate', async () => 'reqobj-123')
+      mock.method(mockRequestObjectStoreProvider, 'save', async () => {})
+
+      await assert.rejects(
+        verifierFlow.createAuthzRequest(
+          ClientId('https://example.com'),
+          'vp_token',
+          'redirect_uri:https://example.com',
+          'direct_post',
+          { presentation_definition: presentationDefinition },
+          true,
+          {}
+        ),
+        { name: 'INVALID_REQUEST' }
+      )
+    })
+  })
+  describe('createAuthzRequest', () => {
+    it('should include transaction_data for dc+sd-jwt format in presentation exchange', async () => {
+      const metadata = VerifierMetadata({
+        client_name: 'Test Verifier',
+        vp_formats: {
+          'dc+sd-jwt': {},
+        },
+      })
+      const presentationDefinition = {
+        id: 'test-pd-id',
+        input_descriptors: [
+          {
+            id: 'test_credential',
+            format: { 'dc+sd-jwt': { alg: ['ES256'] } },
+            constraints: {
+              limit_disclosure: 'required',
+              fields: [
+                {
+                  path: ['$.type[*]'],
+                  filter: {
+                    type: 'string',
+                    const: 'TestCredential',
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }
+
+      mock.method(mockVerifierMetadataStore, 'fetch', async () => metadata)
+      mock.method(mockCnonceProvider, 'generate', async () => 'nonce-123')
+      mock.method(mockCnonceStoreProvider, 'save', async () => {})
+      mock.method(
+        mockCredentialQueryProvider,
+        'generate',
+        async (options: CredentialQueryGenerationOptions) => {
+          return PresentationExchange(options.query as PresentationExchange)
+        }
+      )
+      mock.method(mockTransactionDataProvider, 'generate', (type: string, ids: string[]) => {
+        const data = {
+          type,
+          credential_ids: ids,
+        }
+        return base64url.encode(JSON.stringify(data))
+      })
+
+      const req = await verifierFlow.createAuthzRequest(
+        ClientId('did:key:verifier'),
+        'vp_token',
+        'redirect_uri:did:key:verifier',
+        'direct_post',
+        { presentation_definition: presentationDefinition },
+        false,
+        { transaction_data: { type: 'test_transaction' } }
+      )
+
+      AuthorizationRequest(req)
+      assert.equal(req.response_type, 'vp_token')
+      assert.equal(req.response_mode, 'direct_post')
+      assert.equal(req.nonce, 'nonce-123')
+      assert.ok(req.transaction_data)
+      assert.equal(req.transaction_data.length, 1)
+      const decoded = JSON.parse(base64url.decode(req.transaction_data[0]))
+      assert.equal(decoded.type, 'test_transaction')
+      assert.deepEqual(decoded.credential_ids, ['test_credential'])
+    })
+  })
+
+  describe('verifyPresentations', () => {
+    it('should verify a presentation(jwt_vp_json)', async () => {
+      const verifierId = ClientId('https://example.com')
+      const holderDid = 'did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH'
+      const vpToken = makeJwt(
+        { alg: 'ES256', kid: `${holderDid}#${holderDid}` },
+        {
+          vp: {
+            '@context': ['https://www.w3.org/2018/credentials/v1'],
+            type: ['VerifiablePresentation'],
+            verifiableCredential: [
+              makeJwt(
+                { alg: 'ES256', kid: 'did:example:issuer#key-1' },
+                {
+                  vc: minimalVc,
+                  sub: holderDid,
+                }
+              ),
+            ],
+          },
+          nonce: 'nonce-123',
+        }
+      )
+      const response = AuthorizationResponse({
+        vp_token: vpToken,
+        presentation_submission: {
+          id: 'ps-id',
+          definition_id: 'pd-id',
+          descriptor_map: [
+            {
+              id: '2',
+              format: 'jwt_vp_json',
+              path: '$.vp',
+            },
+          ],
+        },
+      })
+
+      mock.method(mockVerifierMetadataStore, 'fetch', async () =>
+        VerifierMetadata({
+          client_name: 'test',
+          vp_formats: {
+            jwt_vp_json: {
+              alg_values_supported: ['ES256'],
+            },
+          },
+        })
+      )
+      mock.method(mockVerifyVerifiablePresentationProvider, 'canHandle', () => true)
+      mock.method(mockVerifyVerifiablePresentationProvider, 'verify', async () => ({
+        vp: {
+          '@context': ['https://www.w3.org/2018/credentials/v1'],
+          type: ['VerifiablePresentation'],
+          verifiableCredential: [makeJwt({ alg: 'ES256', typ: 'JWT' }, minimalVc)],
+        },
+        nonce: 'nonce-123',
+      }))
+
+      const result = await verifierFlow.verifyPresentations(verifierId, response, {
+        expectedAud: ClientIdentifier(`redirect_uri:${verifierId}`),
+      })
+      assert.deepEqual(result, {
+        vp: {
+          '@context': ['https://www.w3.org/2018/credentials/v1'],
+          type: ['VerifiablePresentation'],
+          verifiableCredential: [makeJwt({ alg: 'ES256', typ: 'JWT' }, minimalVc)],
+        },
+        nonce: 'nonce-123',
+      })
+
+      assert.equal(mockVerifierMetadataStore.fetch.mock.callCount(), 1)
+      assert.equal(mockVerifyVerifiablePresentationProvider.verify.mock.callCount(), 1)
+      assert.equal(
+        mockVerifyVerifiablePresentationProvider.verify.mock.calls[0].arguments[0],
+        vpToken
+      )
+      assert.deepEqual(mockVerifyVerifiablePresentationProvider.verify.mock.calls[0].arguments[1], {
+        kind: 'jwt_vp_json',
+        expectedAud: ClientIdentifier(`redirect_uri:${verifierId}`),
+      })
+    })
+  })
+})

@@ -112,6 +112,9 @@ async function createRequest() {
 
   const state = 'demo-verify-' + crypto.randomUUID().substring(0, 8)
 
+  // バックエンドURLを使用（外部Walletはプロキシを経由しないため）
+  const backendUrl = 'http://localhost:8080'
+
   const requestBody = {
     query: {
       presentation_definition: {
@@ -131,9 +134,9 @@ async function createRequest() {
       },
     },
     state,
-    base_url: location.origin,
+    base_url: backendUrl,
     is_request_uri: true,
-    response_uri: location.origin + '/callback',
+    response_uri: backendUrl + '/callback',
     client_id: 'x509_san_dns:localhost',
   }
 

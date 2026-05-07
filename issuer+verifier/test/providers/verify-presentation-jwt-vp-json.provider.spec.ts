@@ -1,0 +1,428 @@
+import assert from 'node:assert'
+import { afterEach, beforeEach, describe, test, mock } from 'node:test'
+import * as jose from 'jose'
+import {
+  CnonceStoreProvider,
+  DidProvider,
+  HolderBindingProvider,
+  JwtSignatureProvider,
+  VerifyCredentialProvider,
+} from '../../src/providers/provider.types'
+import { verifyVerifiablePresentation } from '../../src/providers/verify-presentation-jwt-vp-json.provider'
+import { VerifiableCredential } from '../../src/credential.types'
+import { DidDocument, JsonWebKey as DidJsonWebKey } from '../../src/did.types'
+
+describe('verifyVerifiablePresentation provider', () => {
+  const expectedAud = 'https://verifier.example/expected-aud'
+
+  let provider: ReturnType<typeof verifyVerifiablePresentation>
+  let mockCnonceStore: CnonceStoreProvider
+  let mockCredentialVerifier: VerifyCredentialProvider
+  let mockDidProvider: DidProvider
+  let mockJwtSignatureProvider: JwtSignatureProvider
+  let mockHolderBindingProvider: HolderBindingProvider
+
+  let holderKeyPair: jose.GenerateKeyPairResult
+  let holderDid: string
+  let holderJwk: jose.JWK
+
+  let vc: VerifiableCredential
+  let vcJwt: string
+
+  beforeEach(async () => {
+    holderKeyPair = await jose.generateKeyPair('ES256')
+    holderJwk = await jose.exportJWK(holderKeyPair.publicKey)
+    const thumbprint = await jose.calculateJwkThumbprint(holderJwk)
+    holderDid = `did:key:${thumbprint}`
+
+    vc = {
+      '@context': ['https://www.w3.org/2018/credentials/v1'],
+      type: ['VerifiableCredential'],
+      issuer: 'https://issuer.example.com',
+      issuanceDate: new Date().toISOString(),
+      credentialSubject: {
+        id: holderDid,
+      },
+    }
+
+    const issuerKeyPair = await jose.generateKeyPair('ES256')
+    vcJwt = await new jose.SignJWT({ vc: { ...vc } } as jose.JWTPayload)
+      .setProtectedHeader({ alg: 'ES256' })
+      .setIssuer('https://issuer.example.com')
+      .sign(issuerKeyPair.privateKey)
+
+    mockCnonceStore = {
+      kind: 'cnonce-store-provider',
+      name: 'mock-cnonce-store',
+      single: true,
+      validate: mock.fn(async (nonce: string) => nonce === 'test-nonce'),
+      revoke: mock.fn(async () => {}),
+      save: mock.fn(async () => {}),
+    }
+
+    mockCredentialVerifier = {
+      kind: 'verify-verifiable-credential-provider',
+      name: 'mock-credential-verifier',
+      single: true,
+      verify: mock.fn(async () => true),
+      canHandle: mock.fn(() => true),
+    }
+
+    const didDoc: DidDocument = {
+      id: holderDid,
+      verificationMethod: [
+        {
+          id: `${holderDid}#${thumbprint}`,
+          type: 'JsonWebKey2020',
+          controller: holderDid,
+          publicKeyJwk: holderJwk as unknown as DidJsonWebKey,
+        },
+      ],
+    }
+
+    mockDidProvider = {
+      kind: 'did-provider',
+      name: 'mock-did-provider',
+      single: false,
+      resolveDid: mock.fn(async () => didDoc),
+      canHandle: mock.fn((method: string) => method === 'key'),
+    }
+
+    mockJwtSignatureProvider = {
+      kind: 'jwt-signature-provider',
+      name: 'mock-jwt-signature-provider',
+      single: true,
+      verify: mock.fn(async () => true),
+    }
+
+    mockHolderBindingProvider = {
+      kind: 'holder-binding-provider',
+      name: 'mock-holder-binding-provider',
+      single: true,
+      verify: mock.fn(async () => true),
+    }
+
+    provider = verifyVerifiablePresentation()
+    mock.method(provider.providers, 'get', (name: string) => {
+      if (name === 'cnonce-store-provider') return mockCnonceStore
+      if (name === 'verify-verifiable-credential-provider') return mockCredentialVerifier
+      if (name === 'did-provider') return [mockDidProvider]
+      if (name === 'jwt-signature-provider') return mockJwtSignatureProvider
+      if (name === 'holder-binding-provider') return mockHolderBindingProvider
+      return undefined
+    })
+  })
+
+  afterEach(() => {
+    mock.restoreAll()
+  })
+
+  const createVpJwt = async (
+    payload: object,
+    kid?: string | null,
+    options?: { includeDefaultAud?: boolean }
+  ) => {
+    const protectedHeader: jose.JWTHeaderParameters = { alg: 'ES256' }
+    if (kid !== null) {
+      protectedHeader.kid = kid ?? `${holderDid}#${await jose.calculateJwkThumbprint(holderJwk)}`
+    }
+    const p = payload as Record<string, unknown>
+    const body =
+      options?.includeDefaultAud === false ? { ...p } : { aud: expectedAud, ...p }
+    return await new jose.SignJWT(body as jose.JWTPayload)
+      .setProtectedHeader(protectedHeader)
+      .sign(holderKeyPair.privateKey)
+  }
+
+  test('should successfully verify a valid presentation', async () => {
+    const vpJwt = await createVpJwt({
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+
+    const result = await provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud })
+    assert.ok(result)
+    assert.strictEqual(result.nonce, 'test-nonce')
+    assert.ok('vp' in result)
+    const vp = result.vp as { verifiableCredential: unknown[] }
+    assert.strictEqual(vp.verifiableCredential.length, 1)
+  })
+
+  test('should throw INVALID_VP_TOKEN when VP JWT is missing aud', async () => {
+    const vpJwt = await createVpJwt(
+      {
+        nonce: 'test-nonce',
+        vp: {
+          type: ['VerifiablePresentation'],
+          verifiableCredential: [vcJwt],
+        },
+      },
+      undefined,
+      { includeDefaultAud: false }
+    )
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_VP_TOKEN',
+      message: /missing aud claim/,
+    })
+  })
+
+  test('should throw INVALID_VP_TOKEN when VP JWT aud does not match expectedAud', async () => {
+    const wrongAud = 'https://verifier.example/wrong-aud'
+    const vpJwt = await createVpJwt({
+      aud: wrongAud,
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_VP_TOKEN',
+      message: /aud does not match expected client_id/,
+    })
+  })
+
+  test('should accept aud as string array when it includes expectedAud', async () => {
+    const vpJwt = await createVpJwt({
+      aud: [expectedAud, 'https://verifier.example/other'],
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    const result = await provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud })
+    assert.strictEqual(result.nonce, 'test-nonce')
+  })
+
+  test('should throw INVALID_VP_TOKEN when aud array does not include expectedAud', async () => {
+    const vpJwt = await createVpJwt({
+      aud: ['https://verifier.example/other-1', 'https://verifier.example/other-2'],
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_VP_TOKEN',
+      message: /aud does not match expected client_id/,
+    })
+  })
+
+  test('should throw an error for unsupported kind', async () => {
+    await assert.rejects(
+      provider.verify('dummy-vp', { kind: 'ldp_vp' } as unknown as NonNullable<
+        Parameters<typeof provider.verify>[1]
+      >),
+      { name: 'ILLEGAL_ARGUMENT', message: 'ldp_vp is not supported.' }
+    )
+  })
+
+  test('should throw an error for invalid vp_token', async () => {
+    await assert.rejects(provider.verify('invalid-jwt', { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_VP_TOKEN',
+    })
+  })
+
+  test('should throw an error for invalid nonce', async () => {
+    const vpJwt = await createVpJwt({
+      nonce: 'invalid-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_NONCE',
+      message: 'nonce is not valid.',
+    })
+  })
+
+  test('should throw an error if no verifiableCredential', async () => {
+    const vpJwt = await createVpJwt({
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_CREDENTIAL',
+      message: 'No credentials is included',
+    })
+  })
+
+  test('should throw if vc is not a string', async () => {
+    // Embedded VC object must satisfy Zod (string | VC object); `{}` fails at schema parse.
+    const embeddedVcAsObject = {
+      '@context': ['https://www.w3.org/2018/credentials/v1'],
+      type: ['VerifiableCredential'],
+      issuer: 'https://issuer.example.com',
+      issuanceDate: new Date().toISOString(),
+      credentialSubject: { id: 'https://subject.example.com/credential-subject' },
+    }
+    const vpJwt = await createVpJwt({
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [embeddedVcAsObject],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'ILLEGAL_ARGUMENT',
+      message: 'VC represented as object is not supported.',
+    })
+  })
+
+  test('should throw if credential verification fails', async () => {
+    mock.method(mockCredentialVerifier, 'verify', async () => false)
+    const vpJwt = await createVpJwt({
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_CREDENTIAL',
+      message: 'credential is not valid.',
+    })
+  })
+
+  test('should throw if kid is missing', async () => {
+    const vpJwt = await createVpJwt(
+      {
+        nonce: 'test-nonce',
+        vp: {
+          type: ['VerifiablePresentation'],
+          verifiableCredential: [vcJwt],
+        },
+      },
+      null
+    )
+
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_VP_TOKEN',
+      message: /Missing key id in the header/,
+    })
+  })
+
+  test('should throw if did method is unsupported', async () => {
+    const vpJwt = await createVpJwt(
+      {
+        nonce: 'test-nonce',
+        vp: {
+          type: ['VerifiablePresentation'],
+          verifiableCredential: [vcJwt],
+        },
+      },
+      'did:unsupported:123'
+    )
+
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'PROVIDER_NOT_FOUND',
+      message: 'No provider found which can handle: unsupported',
+    })
+  })
+
+  test('should throw if did resolving fails', async () => {
+    mock.method(mockDidProvider, 'resolveDid', async () => null)
+    const vpJwt = await createVpJwt({
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_VP_TOKEN',
+      message: /Cannot resolve DID/,
+    })
+  })
+
+  test('should throw if verificationMethod is not found for kid', async () => {
+    const didDocWithDifferentKid = {
+      id: holderDid,
+      // biome-ignore lint/suspicious/noExplicitAny: <explanation>
+      verificationMethod: [
+        {
+          id: 'did:key:another#key',
+          type: 'JsonWebKey2020',
+          controller: holderDid,
+          publicKeyJwk: holderJwk as unknown as DidJsonWebKey,
+        },
+      ],
+    }
+    mock.method(mockDidProvider, 'resolveDid', async () => didDocWithDifferentKid)
+    const vpJwt = await createVpJwt({
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_VP_TOKEN',
+      message: /Cannot find verification method/,
+    })
+  })
+
+  test('should throw if publicKeyJwk is missing in verificationMethod', async () => {
+    const didDocWithoutJwk: DidDocument = {
+      id: holderDid,
+      verificationMethod: [
+        {
+          id: `${holderDid}#${await jose.calculateJwkThumbprint(holderJwk)}`,
+          type: 'JsonWebKey2020',
+          controller: holderDid,
+        },
+      ],
+    }
+    mock.method(mockDidProvider, 'resolveDid', async () => didDocWithoutJwk)
+    const vpJwt = await createVpJwt({
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_VP_TOKEN',
+      message: /Cannot find verification method/,
+    })
+  })
+
+  test('should throw if jwt signature verification fails', async () => {
+    mock.method(mockJwtSignatureProvider, 'verify', async () => false)
+    const vpJwt = await createVpJwt({
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'INVALID_PROOF',
+      message: 'jwt is not valid.',
+    })
+  })
+
+  test('should throw if holder binding verification fails', async () => {
+    mock.method(mockHolderBindingProvider, 'verify', async () => false)
+    const vpJwt = await createVpJwt({
+      nonce: 'test-nonce',
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [vcJwt],
+      },
+    })
+    await assert.rejects(provider.verify(vpJwt, { kind: 'jwt_vp_json', expectedAud }), {
+      name: 'HOLDER_BINDING_FAILED',
+      message: 'Holder binding verification failed.',
+    })
+  })
+})
