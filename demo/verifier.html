@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verifier - VCKnots Demo</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f3ff;min-height:100vh}
+nav{background:#3b1f6e;color:#fff;padding:.75rem 1.5rem;display:flex;align-items:center;gap:1rem}
+nav a{color:#c4b5fd;text-decoration:none;font-size:.9rem}
+nav a:hover{color:#fff}
+nav .title{font-weight:700;font-size:1.1rem;margin-right:auto}
+.container{max-width:720px;margin:2rem auto;padding:0 1rem}
+.card{background:#fff;border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+h2{color:#3b1f6e;font-size:1.15rem;margin-bottom:1rem;padding-bottom:.5rem;border-bottom:2px solid #ede9fe}
+label{display:block;font-weight:600;margin-bottom:.4rem;color:#334155;font-size:.9rem}
+select,input{width:100%;padding:.6rem .8rem;border:1px solid #cbd5e1;border-radius:8px;font-size:.95rem;margin-bottom:1rem}
+button{background:#7c3aed;color:#fff;border:none;padding:.7rem 1.5rem;border-radius:8px;font-size:1rem;cursor:pointer;font-weight:600;width:100%}
+button:hover{background:#6d28d9}
+button:disabled{background:#94a3b8;cursor:not-allowed}
+.result{margin-top:1rem;display:none}
+.result.show{display:block}
+.url-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;word-break:break-all;font-family:monospace;font-size:.82rem;position:relative;margin-bottom:1rem}
+.copy-btn{position:absolute;top:.5rem;right:.5rem;background:#7c3aed;color:#fff;border:none;padding:.3rem .6rem;border-radius:4px;font-size:.75rem;cursor:pointer;width:auto}
+.copy-btn:hover{background:#6d28d9}
+.qr-container{text-align:center;margin:1rem 0}
+.qr-container canvas{border:8px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.1);border-radius:4px}
+.status{padding:.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:.9rem}
+.status.info{background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe}
+.status.success{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+.status.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.status.waiting{background:#faf5ff;color:#6b21a8;border:1px solid #e9d5ff;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+.details{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem}
+.details dt{font-weight:600;color:#475569;font-size:.85rem;margin-top:.5rem}
+.details dd{color:#1e293b;font-size:.9rem;margin-bottom:.5rem;font-family:monospace;word-break:break-all}
+.log{background:#1e293b;color:#94a3b8;border-radius:8px;padding:1rem;font-family:monospace;font-size:.78rem;max-height:220px;overflow-y:auto;white-space:pre-wrap;line-height:1.5}
+.log .ok{color:#4ade80}
+.log .err{color:#f87171}
+.log .info{color:#60a5fa}
+.verification-result{border:2px solid #22c55e;background:#f0fdf4;border-radius:12px;padding:1.5rem;text-align:center;margin-top:1rem}
+.verification-result h3{color:#166534;font-size:1.3rem;margin-bottom:.5rem}
+.verification-result p{color:#15803d;font-size:.95rem}
+</style>
+</head>
+<body>
+<nav>
+  <span class="title">🔍 Verifier</span>
+  <a href="/">Home</a>
+  <a href="/issuer.html">Issuer</a>
+  <a href="/wallet.html">Wallet</a>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <h2>検証リクエストの作成</h2>
+    <label for="credentialId">要求するクレデンシャル</label>
+    <select id="credentialId">
+      <option value="UniversityDegreeCredential">UniversityDegreeCredential (大学学位)</option>
+    </select>
+    <button id="createBtn" onclick="createRequest()">検証リクエストを作成</button>
+  </div>
+
+  <div class="result" id="result">
+    <div class="card">
+      <h2>認可リクエスト</h2>
+      <div id="verifyStatus" class="status waiting">
+        Walletからの提示を待っています...
+      </div>
+
+      <label>Authorization Request URL</label>
+      <div class="url-box" id="requestUrl">
+        <button class="copy-btn" onclick="copyUrl()">Copy</button>
+        <span id="requestUrlText"></span>
+      </div>
+
+      <label>リクエスト詳細</label>
+      <dl class="details" id="requestDetails"></dl>
+
+      <div id="verificationResult" style="display:none"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>ログ</h2>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+const logEl = document.getElementById('log')
+function log(msg, cls = '') {
+  const span = document.createElement('span')
+  span.className = cls
+  span.textContent = msg + '\n'
+  logEl.appendChild(span)
+  logEl.scrollTop = logEl.scrollHeight
+}
+
+let lastRequestUrl = ''
+let pollInterval = null
+
+async function createRequest() {
+  const btn = document.getElementById('createBtn')
+  const credentialId = document.getElementById('credentialId').value
+  btn.disabled = true
+  btn.textContent = '作成中...'
+
+  // Stop previous polling
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null }
+
+  const state = 'demo-verify-' + crypto.randomUUID().substring(0, 8)
+
+  const requestBody = {
+    query: {
+      presentation_definition: {
+        id: 'demo-pd-' + Date.now(),
+        input_descriptors: [{
+          id: 'demo-descriptor',
+          name: credentialId,
+          purpose: 'クレデンシャルの検証',
+          format: { jwt_vc_json: { alg: ['ES256'] } },
+          constraints: {
+            fields: [{
+              path: ['$.vc.type'],
+              filter: { type: 'array', contains: { const: credentialId } },
+            }],
+          },
+        }],
+      },
+    },
+    state,
+    base_url: location.origin,
+    is_request_uri: true,
+    response_uri: location.origin + '/callback',
+    client_id: 'x509_san_dns:localhost',
+  }
+
+  log(`── 検証リクエスト作成 ──`, 'info')
+  log(`Credential: ${credentialId}`)
+  log(`State: ${state}`)
+  log(`[POST] /request-object`, 'info')
+
+  try {
+    const res = await fetch('/request-object', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
+    const authzUrl = await res.text()
+    log(`← ${authzUrl.substring(0, 80)}...`, 'ok')
+
+    lastRequestUrl = authzUrl
+    document.getElementById('requestUrlText').textContent = authzUrl
+
+    // Parse for details
+    const url = new URL(authzUrl)
+    const clientId = url.searchParams.get('client_id') || ''
+    const requestUri = url.searchParams.get('request_uri') || ''
+
+    // Details
+    document.getElementById('requestDetails').innerHTML = `
+      <dt>client_id</dt><dd>${clientId}</dd>
+      <dt>request_uri</dt><dd>${requestUri}</dd>
+      <dt>state</dt><dd>${state}</dd>
+      <dt>response_uri</dt><dd>${requestBody.response_uri}</dd>
+    `
+
+    // Show result section
+    const resultEl = document.getElementById('result')
+    resultEl.classList.add('show')
+    document.getElementById('verifyStatus').className = 'status waiting'
+    document.getElementById('verifyStatus').textContent = 'Walletからの提示を待っています... このURLをWalletページに貼り付けてください。'
+    document.getElementById('verificationResult').style.display = 'none'
+
+    log('検証リクエスト生成完了。Walletからの提示を待機中...', 'ok')
+
+    // Start polling for result
+    pollInterval = setInterval(() => pollResult(state), 2000)
+  } catch (err) {
+    log(`エラー: ${err.message}`, 'err')
+    alert('リクエスト作成に失敗しました: ' + err.message)
+  } finally {
+    btn.disabled = false
+    btn.textContent = '検証リクエストを作成'
+  }
+}
+
+async function pollResult(state) {
+  try {
+    const res = await fetch(`/demo/results/${encodeURIComponent(state)}`)
+    const result = await res.json()
+    if (result.verified) {
+      clearInterval(pollInterval)
+      pollInterval = null
+
+      log('検証完了! Walletからクレデンシャルが提示され、正常に検証されました。', 'ok')
+
+      document.getElementById('verifyStatus').className = 'status success'
+      document.getElementById('verifyStatus').textContent = '検証完了!'
+
+      const resultEl = document.getElementById('verificationResult')
+      resultEl.style.display = 'block'
+      resultEl.innerHTML = `
+        <div class="verification-result">
+          <h3>✅ 検証成功</h3>
+          <p>Walletからのクレデンシャル提示が正常に検証されました。</p>
+          <p style="font-size:.8rem;color:#64748b;margin-top:.5rem">
+            検証完了時刻: ${new Date(result.timestamp).toLocaleString('ja-JP')}
+          </p>
+        </div>
+      `
+    }
+  } catch {}
+}
+
+function copyUrl() {
+  navigator.clipboard.writeText(lastRequestUrl).then(() => {
+    const btn = document.querySelector('.copy-btn')
+    btn.textContent = 'Copied!'
+    setTimeout(() => btn.textContent = 'Copy', 1500)
+  })
+}
+</script>
+</body>
+</html>

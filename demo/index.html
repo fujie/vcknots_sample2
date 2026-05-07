@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VCKnots Demo</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f2f5;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.container{max-width:800px;width:100%;padding:2rem}
+h1{text-align:center;font-size:2rem;color:#1a1a2e;margin-bottom:.5rem}
+p.sub{text-align:center;color:#666;margin-bottom:2.5rem;font-size:1.05rem}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:1.5rem}
+.card{background:#fff;border-radius:12px;padding:2rem 1.5rem;text-align:center;text-decoration:none;color:inherit;box-shadow:0 2px 8px rgba(0,0,0,.08);transition:transform .15s,box-shadow .15s}
+.card:hover{transform:translateY(-4px);box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.card .icon{font-size:3rem;margin-bottom:1rem}
+.card h2{font-size:1.25rem;margin-bottom:.5rem}
+.card p{color:#666;font-size:.9rem;line-height:1.5}
+.card.issuer{border-top:4px solid #2563eb}
+.card.wallet{border-top:4px solid #059669}
+.card.verifier{border-top:4px solid #7c3aed}
+.flow{margin-top:2.5rem;text-align:center;color:#888;font-size:.9rem}
+.flow .arrow{margin:0 .5rem;color:#bbb}
+@media(max-width:640px){.cards{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>VCKnots Demo</h1>
+  <p class="sub">Verifiable Credentials のテスト環境</p>
+  <div class="cards">
+    <a href="/issuer.html" class="card issuer">
+      <div class="icon">🏛️</div>
+      <h2>Issuer</h2>
+      <p>クレデンシャルを発行します。オファーURLを生成してWalletに渡します。</p>
+    </a>
+    <a href="/wallet.html" class="card wallet">
+      <div class="icon">👛</div>
+      <h2>Wallet</h2>
+      <p>クレデンシャルを受け取り保管します。Verifierからの要求に応じて提示します。</p>
+    </a>
+    <a href="/verifier.html" class="card verifier">
+      <div class="icon">🔍</div>
+      <h2>Verifier</h2>
+      <p>クレデンシャルの検証を要求します。Walletからの提示を検証します。</p>
+    </a>
+  </div>
+  <div class="flow">
+    <strong>フロー:</strong>
+    Issuer がオファー生成 <span class="arrow">→</span>
+    Wallet が受取・保管 <span class="arrow">→</span>
+    Verifier が検証要求 <span class="arrow">→</span>
+    Wallet が提示 <span class="arrow">→</span>
+    検証完了
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wallet - VCKnots Demo</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0faf4;min-height:100vh}
+nav{background:#064e3b;color:#fff;padding:.75rem 1.5rem;display:flex;align-items:center;gap:1rem}
+nav a{color:#6ee7b7;text-decoration:none;font-size:.9rem}
+nav a:hover{color:#fff}
+nav .title{font-weight:700;font-size:1.1rem;margin-right:auto}
+.container{max-width:760px;margin:2rem auto;padding:0 1rem}
+.card{background:#fff;border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+h2{color:#064e3b;font-size:1.15rem;margin-bottom:1rem;padding-bottom:.5rem;border-bottom:2px solid #d1fae5}
+h3{color:#065f46;font-size:1rem;margin:1rem 0 .5rem}
+label{display:block;font-weight:600;margin-bottom:.4rem;color:#334155;font-size:.9rem}
+input,textarea{width:100%;padding:.6rem .8rem;border:1px solid #cbd5e1;border-radius:8px;font-size:.9rem;margin-bottom:.75rem;font-family:monospace}
+textarea{resize:vertical;min-height:60px}
+button{background:#059669;color:#fff;border:none;padding:.65rem 1.5rem;border-radius:8px;font-size:.95rem;cursor:pointer;font-weight:600;width:100%}
+button:hover{background:#047857}
+button:disabled{background:#94a3b8;cursor:not-allowed}
+button.secondary{background:#e2e8f0;color:#475569;margin-top:.5rem}
+button.secondary:hover{background:#cbd5e1}
+.status{padding:.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:.9rem}
+.status.info{background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe}
+.status.success{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+.status.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.status.warning{background:#fffbeb;color:#92400e;border:1px solid #fde68a}
+.cred-card{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:1rem;margin-bottom:.75rem;position:relative}
+.cred-card .badge{display:inline-block;background:#059669;color:#fff;font-size:.7rem;padding:.15rem .5rem;border-radius:4px;font-weight:600;margin-bottom:.5rem}
+.cred-card .field{display:flex;justify-content:space-between;padding:.25rem 0;font-size:.85rem;border-bottom:1px solid #f1f5f9}
+.cred-card .field:last-child{border:none}
+.cred-card .field .k{color:#64748b;font-weight:500}
+.cred-card .field .v{color:#1e293b;font-weight:600;font-family:monospace;font-size:.8rem}
+.empty{text-align:center;color:#94a3b8;padding:2rem;font-size:.9rem}
+.log{background:#1e293b;color:#94a3b8;border-radius:8px;padding:1rem;font-family:monospace;font-size:.78rem;max-height:220px;overflow-y:auto;white-space:pre-wrap;line-height:1.5}
+.log .ok{color:#4ade80}
+.log .err{color:#f87171}
+.log .info{color:#60a5fa}
+.log .warn{color:#fbbf24}
+.wallet-info{display:flex;gap:1rem;flex-wrap:wrap;align-items:center}
+.wallet-info .did{background:#f1f5f9;padding:.5rem .75rem;border-radius:6px;font-family:monospace;font-size:.75rem;word-break:break-all;flex:1;min-width:200px}
+.section-divider{border:none;border-top:2px dashed #d1fae5;margin:1.5rem 0}
+.step-num{display:inline-flex;align-items:center;justify-content:center;width:1.6rem;height:1.6rem;background:#059669;color:#fff;border-radius:50%;font-size:.75rem;font-weight:700;margin-right:.5rem}
+</style>
+</head>
+<body>
+<nav>
+  <span class="title">👛 Wallet</span>
+  <a href="/">Home</a>
+  <a href="/issuer.html">Issuer</a>
+  <a href="/verifier.html">Verifier</a>
+</nav>
+
+<div class="container">
+  <!-- Wallet Info -->
+  <div class="card">
+    <h2>ウォレット情報</h2>
+    <div class="wallet-info">
+      <label style="margin:0">DID:</label>
+      <div class="did" id="walletDid">読み込み中...</div>
+    </div>
+  </div>
+
+  <!-- Step 1: Receive Credential -->
+  <div class="card">
+    <h2><span class="step-num">1</span>クレデンシャルの受取</h2>
+    <p style="color:#64748b;font-size:.85rem;margin-bottom:1rem">
+      Issuerページで生成されたオファーURLを貼り付けてください。
+    </p>
+    <label for="offerInput">Credential Offer URL</label>
+    <textarea id="offerInput" placeholder="openid-credential-offer://?credential_offer=..."></textarea>
+    <button id="receiveBtn" onclick="receiveCredential()">クレデンシャルを受け取る</button>
+    <div id="receiveStatus" class="status info" style="display:none;margin-top:.75rem"></div>
+  </div>
+
+  <!-- Credential Store -->
+  <div class="card">
+    <h2>保管中のクレデンシャル</h2>
+    <div id="credList">
+      <div class="empty">クレデンシャルがありません</div>
+    </div>
+  </div>
+
+  <hr class="section-divider">
+
+  <!-- Step 2: Present Credential -->
+  <div class="card">
+    <h2><span class="step-num">2</span>クレデンシャルの提示</h2>
+    <p style="color:#64748b;font-size:.85rem;margin-bottom:1rem">
+      Verifierページで生成された認可リクエストURLを貼り付けてください。
+    </p>
+    <label for="vpInput">Authorization Request URL</label>
+    <textarea id="vpInput" placeholder="openid4vp://authorize?client_id=...&request_uri=..."></textarea>
+    <button id="presentBtn" onclick="presentCredential()" disabled>クレデンシャルを提示する</button>
+    <div id="presentStatus" class="status info" style="display:none;margin-top:.75rem"></div>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <h2>ログ</h2>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script type="module">
+import { SignJWT, importJWK } from 'https://cdn.jsdelivr.net/npm/jose@6.2.2/+esm'
+
+// ── Wallet Key (same as Go MockKeyEntry) ──────────────────
+const WALLET_JWK = {
+  kty: 'EC', crv: 'P-256',
+  x: 'ezZgKwMueAyZLHUgSpzNkbOWDgjJXTAOJn8MftOnayQ',
+  y: 'Fy_U4KyZQf-9jKpFJtH6OFFRXmwAcveyfuoDp1hSOFo',
+  d: 'jAfOh_53IRxqpEsFojZK8iHP--L8ol3ePEo3DnwiIyM',
+}
+const HOLDER_DID = 'did:key:zDnaeYiwHNeMYaj21Wo9jPCowtnBrY8he8UCK8ZZN1mhhx8PM'
+
+let walletKey
+const credentials = [] // { jwt, payload, receivedAt }
+
+// ── Logging ────────────────────────────────────────────────
+const logEl = document.getElementById('log')
+function log(msg, cls = '') {
+  const span = document.createElement('span')
+  span.className = cls
+  span.textContent = msg + '\n'
+  logEl.appendChild(span)
+  logEl.scrollTop = logEl.scrollHeight
+}
+
+// ── Init ───────────────────────────────────────────────────
+async function init() {
+  walletKey = await importJWK(WALLET_JWK, 'ES256')
+  document.getElementById('walletDid').textContent = HOLDER_DID
+  log('ウォレット初期化完了', 'ok')
+  log(`DID: ${HOLDER_DID}`, 'info')
+}
+init()
+
+// ── Receive Credential ────────────────────────────────────
+window.receiveCredential = async function() {
+  const btn = document.getElementById('receiveBtn')
+  const statusEl = document.getElementById('receiveStatus')
+  const offerUrl = document.getElementById('offerInput').value.trim()
+
+  if (!offerUrl.startsWith('openid-credential-offer://')) {
+    statusEl.className = 'status error'
+    statusEl.textContent = 'URLが openid-credential-offer:// で始まる必要があります'
+    statusEl.style.display = 'block'
+    return
+  }
+
+  btn.disabled = true
+  btn.textContent = '受取中...'
+  statusEl.className = 'status info'
+  statusEl.textContent = 'クレデンシャルを取得しています...'
+  statusEl.style.display = 'block'
+
+  try {
+    // 1. Parse offer
+    log('── クレデンシャル受取開始 ──', 'info')
+    const encoded = offerUrl.replace('openid-credential-offer://?credential_offer=', '')
+    const offer = JSON.parse(decodeURIComponent(encoded))
+    log(`Issuer: ${offer.credential_issuer}`, 'info')
+    log(`Config: ${offer.credential_configuration_ids?.join(', ')}`)
+
+    const grant = offer.grants?.['urn:ietf:params:oauth:grant-type:pre-authorized_code']
+    if (!grant) throw new Error('Pre-authorized code grant が見つかりません')
+    const preAuthCode = grant['pre-authorized_code']
+    log(`Pre-Auth Code: ${preAuthCode}`)
+
+    // 2. Get access token
+    log('[POST] /token', 'info')
+    const tokenRes = await fetch('/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:pre-authorized_code',
+        'pre-authorized_code': preAuthCode,
+      }),
+    })
+    if (!tokenRes.ok) throw new Error(`Token取得失敗: ${tokenRes.status} ${await tokenRes.text()}`)
+    const token = await tokenRes.json()
+    log(`Access Token 取得: ${token.access_token.substring(0, 20)}...`, 'ok')
+    log(`c_nonce: ${token.c_nonce}`)
+
+    // 3. Create proof JWT
+    const proofJwt = await new SignJWT({
+      aud: offer.credential_issuer,
+      nonce: token.c_nonce,
+    })
+      .setProtectedHeader({ alg: 'ES256', typ: 'openid4vci-proof+jwt', kid: HOLDER_DID })
+      .setIssuedAt()
+      .sign(walletKey)
+
+    // 4. Request credential
+    log('[POST] /credentials', 'info')
+    const credRes = await fetch('/credentials', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token.access_token}`,
+      },
+      body: JSON.stringify({
+        format: 'jwt_vc_json',
+        credential_definition: {
+          type: ['VerifiableCredential', ...offer.credential_configuration_ids],
+        },
+        proof: { proof_type: 'jwt', jwt: proofJwt },
+      }),
+    })
+    if (!credRes.ok) throw new Error(`クレデンシャル取得失敗: ${credRes.status} ${await credRes.text()}`)
+    const credResponse = await credRes.json()
+    const credJwt = credResponse.credential
+
+    // 5. Decode and store
+    const parts = credJwt.split('.')
+    const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')))
+    const cred = { jwt: credJwt, payload, receivedAt: new Date().toISOString() }
+    credentials.push(cred)
+    log(`クレデンシャルを受け取りました!`, 'ok')
+    log(`  Type: ${payload.vc?.type?.join(', ')}`)
+    log(`  Subject: ${payload.sub}`)
+    log(`  Issuer: ${payload.iss}`)
+
+    renderCredentials()
+    document.getElementById('presentBtn').disabled = false
+
+    statusEl.className = 'status success'
+    statusEl.textContent = `クレデンシャルを受け取りました (${payload.vc?.type?.filter(t => t !== 'VerifiableCredential').join(', ')})`
+  } catch (err) {
+    log(`エラー: ${err.message}`, 'err')
+    statusEl.className = 'status error'
+    statusEl.textContent = `エラー: ${err.message}`
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'クレデンシャルを受け取る'
+  }
+}
+
+// ── Render Credentials ────────────────────────────────────
+function renderCredentials() {
+  const list = document.getElementById('credList')
+  if (credentials.length === 0) {
+    list.innerHTML = '<div class="empty">クレデンシャルがありません</div>'
+    return
+  }
+  list.innerHTML = credentials.map((c, i) => {
+    const vc = c.payload.vc || {}
+    const types = (vc.type || []).filter(t => t !== 'VerifiableCredential')
+    const subject = vc.credentialSubject || {}
+    const fields = Object.entries(subject)
+      .filter(([k]) => k !== 'id')
+      .map(([k, v]) => `<div class="field"><span class="k">${k}</span><span class="v">${v}</span></div>`)
+      .join('')
+    return `
+      <div class="cred-card">
+        <div class="badge">${types.join(', ') || 'Credential'}</div>
+        <div class="field"><span class="k">Issuer</span><span class="v">${c.payload.iss}</span></div>
+        <div class="field"><span class="k">Subject DID</span><span class="v">${(c.payload.sub || '').substring(0, 40)}...</span></div>
+        ${fields}
+        <div class="field"><span class="k">受取日時</span><span class="v">${c.receivedAt}</span></div>
+      </div>
+    `
+  }).join('')
+}
+
+// ── Present Credential ────────────────────────────────────
+window.presentCredential = async function() {
+  const btn = document.getElementById('presentBtn')
+  const statusEl = document.getElementById('presentStatus')
+  const vpUrl = document.getElementById('vpInput').value.trim()
+
+  if (!vpUrl.startsWith('openid4vp://')) {
+    statusEl.className = 'status error'
+    statusEl.textContent = 'URLが openid4vp:// で始まる必要があります'
+    statusEl.style.display = 'block'
+    return
+  }
+
+  if (credentials.length === 0) {
+    statusEl.className = 'status warning'
+    statusEl.textContent = '提示するクレデンシャルがありません。先にクレデンシャルを受け取ってください。'
+    statusEl.style.display = 'block'
+    return
+  }
+
+  btn.disabled = true
+  btn.textContent = '提示中...'
+  statusEl.className = 'status info'
+  statusEl.textContent = 'クレデンシャルを提示しています...'
+  statusEl.style.display = 'block'
+
+  try {
+    log('── クレデンシャル提示開始 ──', 'info')
+
+    // 1. Parse authorization request URL
+    const url = new URL(vpUrl)
+    const clientId = url.searchParams.get('client_id') || ''
+    const requestUri = url.searchParams.get('request_uri') || ''
+    log(`client_id: ${clientId}`)
+    log(`request_uri: ${requestUri}`)
+
+    // 2. Fetch Request Object JWT (proxy through demo server)
+    const proxyRequestUri = requestUri.replace(/^https?:\/\/[^/]+/, '')
+    log(`[GET] ${proxyRequestUri}`, 'info')
+    const reqObjRes = await fetch(proxyRequestUri)
+    if (!reqObjRes.ok) throw new Error(`Request Object 取得失敗: ${reqObjRes.status}`)
+    const requestJwt = await reqObjRes.text()
+
+    // 3. Decode Request Object
+    const reqParts = requestJwt.split('.')
+    const reqPayload = JSON.parse(atob(reqParts[1].replace(/-/g,'+').replace(/_/g,'/')))
+    const nonce = reqPayload.nonce
+    const responseUri = reqPayload.response_uri
+    const state = reqPayload.state
+    const pd = reqPayload.presentation_definition
+    log(`nonce: ${nonce}`)
+    log(`response_uri: ${responseUri}`)
+    log(`state: ${state}`)
+    log(`Presentation Definition: ${pd?.id}`)
+
+    // 4. Select credential (use first available)
+    const selectedCred = credentials[0]
+    log(`使用するクレデンシャル: ${selectedCred.payload.vc?.type?.join(', ')}`, 'info')
+
+    // 5. Create VP Token
+    const vpToken = await new SignJWT({
+      iss: HOLDER_DID,
+      aud: clientId,
+      vp: {
+        type: ['VerifiablePresentation'],
+        verifiableCredential: [selectedCred.jwt],
+        holder: HOLDER_DID,
+      },
+      nonce,
+    })
+      .setProtectedHeader({ alg: 'ES256', typ: 'JWT', kid: HOLDER_DID })
+      .sign(walletKey)
+
+    log(`VP Token 生成完了`, 'ok')
+
+    // 6. Create presentation_submission
+    const presentationSubmission = {
+      id: crypto.randomUUID(),
+      definition_id: pd.id,
+      descriptor_map: [{
+        id: pd.input_descriptors[0].id,
+        format: 'jwt_vp_json',
+        path: '$.vp',
+        path_nested: {
+          id: pd.input_descriptors[0].id,
+          format: 'jwt_vc_json',
+          path: '$.verifiableCredential[0]',
+        },
+      }],
+    }
+
+    // 7. Submit to callback (proxy through demo server)
+    const proxyResponseUri = responseUri.replace(/^https?:\/\/[^/]+/, '')
+    log(`[POST] ${proxyResponseUri}`, 'info')
+    const callbackRes = await fetch(proxyResponseUri, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        vp_token: vpToken,
+        presentation_submission: JSON.stringify(presentationSubmission),
+        state: state || '',
+      }),
+    })
+
+    const callbackBody = await callbackRes.json()
+    log(`Callback応答: ${callbackRes.status} ${JSON.stringify(callbackBody)}`, callbackRes.ok ? 'ok' : 'err')
+
+    if (callbackRes.ok) {
+      statusEl.className = 'status success'
+      statusEl.textContent = '検証成功! クレデンシャルが正常に検証されました。'
+      log('クレデンシャルの提示・検証が完了しました!', 'ok')
+    } else {
+      throw new Error(callbackBody.error_description || callbackBody.error || '検証失敗')
+    }
+  } catch (err) {
+    log(`エラー: ${err.message}`, 'err')
+    statusEl.className = 'status error'
+    statusEl.textContent = `エラー: ${err.message}`
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'クレデンシャルを提示する'
+  }
+}
+</script>
+</body>
+</html>

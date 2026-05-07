@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Issuer - VCKnots Demo</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f0f4ff;min-height:100vh}
+nav{background:#1e3a5f;color:#fff;padding:.75rem 1.5rem;display:flex;align-items:center;gap:1rem}
+nav a{color:#94b8db;text-decoration:none;font-size:.9rem}
+nav a:hover{color:#fff}
+nav .title{font-weight:700;font-size:1.1rem;margin-right:auto}
+.container{max-width:720px;margin:2rem auto;padding:0 1rem}
+.card{background:#fff;border-radius:12px;padding:1.5rem;margin-bottom:1.5rem;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+h2{color:#1e3a5f;font-size:1.2rem;margin-bottom:1rem;padding-bottom:.5rem;border-bottom:2px solid #e2e8f0}
+label{display:block;font-weight:600;margin-bottom:.4rem;color:#334155;font-size:.9rem}
+select,input{width:100%;padding:.6rem .8rem;border:1px solid #cbd5e1;border-radius:8px;font-size:.95rem;margin-bottom:1rem}
+button{background:#2563eb;color:#fff;border:none;padding:.7rem 1.5rem;border-radius:8px;font-size:1rem;cursor:pointer;font-weight:600;width:100%}
+button:hover{background:#1d4ed8}
+button:disabled{background:#94a3b8;cursor:not-allowed}
+.result{margin-top:1rem;display:none}
+.result.show{display:block}
+.url-box{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:8px;padding:1rem;word-break:break-all;font-family:monospace;font-size:.85rem;position:relative;margin-bottom:1rem}
+.copy-btn{position:absolute;top:.5rem;right:.5rem;background:#2563eb;color:#fff;border:none;padding:.3rem .6rem;border-radius:4px;font-size:.75rem;cursor:pointer;width:auto}
+.copy-btn:hover{background:#1d4ed8}
+.details{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem}
+.details dt{font-weight:600;color:#475569;font-size:.85rem;margin-top:.5rem}
+.details dd{color:#1e293b;font-size:.9rem;margin-bottom:.5rem}
+.qr-container{text-align:center;margin:1rem 0}
+.qr-container canvas{border:8px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.1);border-radius:4px}
+.status{padding:.75rem 1rem;border-radius:8px;margin-bottom:1rem;font-size:.9rem}
+.status.info{background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe}
+.status.success{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+.status.error{background:#fef2f2;color:#991b1b;border:1px solid #fecaca}
+.log{background:#1e293b;color:#94a3b8;border-radius:8px;padding:1rem;font-family:monospace;font-size:.8rem;max-height:200px;overflow-y:auto;white-space:pre-wrap}
+.log .ok{color:#4ade80}
+.log .err{color:#f87171}
+.log .info{color:#60a5fa}
+</style>
+</head>
+<body>
+<nav>
+  <span class="title">🏛️ Issuer</span>
+  <a href="/">Home</a>
+  <a href="/wallet.html">Wallet</a>
+  <a href="/verifier.html">Verifier</a>
+</nav>
+
+<div class="container">
+  <div class="card">
+    <h2>クレデンシャルオファーの生成</h2>
+    <label for="credType">Credential Configuration</label>
+    <select id="credType">
+      <option value="UniversityDegreeCredential">UniversityDegreeCredential (大学学位)</option>
+    </select>
+    <button id="createBtn" onclick="createOffer()">クレデンシャルオファーを生成</button>
+  </div>
+
+  <div class="result" id="result">
+    <div class="card">
+      <h2>生成されたオファー</h2>
+      <div class="status success" id="statusMsg"></div>
+
+      <label>Offer URL</label>
+      <div class="url-box" id="offerUrl">
+        <button class="copy-btn" onclick="copyUrl()">Copy</button>
+        <span id="offerUrlText"></span>
+      </div>
+
+      <label>オファー詳細</label>
+      <dl class="details" id="offerDetails"></dl>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>ログ</h2>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+const logEl = document.getElementById('log')
+function log(msg, cls = '') {
+  const span = document.createElement('span')
+  span.className = cls
+  span.textContent = msg + '\n'
+  logEl.appendChild(span)
+  logEl.scrollTop = logEl.scrollHeight
+}
+
+let lastOfferUrl = ''
+
+async function createOffer() {
+  const btn = document.getElementById('createBtn')
+  const credType = document.getElementById('credType').value
+  btn.disabled = true
+  btn.textContent = '生成中...'
+  log(`[POST] /configurations/${credType}/offer`, 'info')
+
+  try {
+    const res = await fetch(`/configurations/${credType}/offer`, { method: 'POST' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`)
+    const offerUri = await res.text()
+
+    log(`← ${offerUri.substring(0, 80)}...`, 'ok')
+
+    // Parse offer
+    const encoded = offerUri.replace('openid-credential-offer://?credential_offer=', '')
+    const offer = JSON.parse(decodeURIComponent(encoded))
+
+    // Display result
+    lastOfferUrl = offerUri
+    document.getElementById('offerUrlText').textContent = offerUri
+    document.getElementById('statusMsg').textContent =
+      `オファーが生成されました。このURLをWalletに貼り付けてクレデンシャルを受け取ってください。`
+
+    // Details
+    const details = document.getElementById('offerDetails')
+    const grant = offer.grants?.['urn:ietf:params:oauth:grant-type:pre-authorized_code']
+    details.innerHTML = `
+      <dt>Credential Issuer</dt><dd>${offer.credential_issuer}</dd>
+      <dt>Configuration IDs</dt><dd>${offer.credential_configuration_ids?.join(', ')}</dd>
+      <dt>Grant Type</dt><dd>Pre-Authorized Code</dd>
+      <dt>Pre-Authorized Code</dt><dd><code>${grant?.['pre-authorized_code'] ?? 'N/A'}</code></dd>
+    `
+    document.getElementById('result').classList.add('show')
+    log('オファー生成完了', 'ok')
+  } catch (err) {
+    log(`エラー: ${err.message}`, 'err')
+    alert('オファー生成に失敗しました: ' + err.message)
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'クレデンシャルオファーを生成'
+  }
+}
+
+function copyUrl() {
+  navigator.clipboard.writeText(lastOfferUrl).then(() => {
+    const btn = document.querySelector('.copy-btn')
+    btn.textContent = 'Copied!'
+    setTimeout(() => btn.textContent = 'Copy', 1500)
+  })
+}
+</script>
+</body>
+</html>
